@@ -15,13 +15,14 @@ const loadingUserName = ref(false)
 const showUuidSetup = ref(false)
 const tempUserUuid = ref('')
 const userProfileLoaded = ref(false)
+const editingMessageId = ref<number | null>(null)
+const editingMessageText = ref('')
 let pusher: Pusher | null = null
 let userChannel: any = null
 
 // Request browser notification permission
 const requestNotificationPermission = async () => {
   if (!('Notification' in window)) {
-    console.log('This browser does not support notifications')
     return
   }
 
@@ -56,14 +57,42 @@ const initPusher = (userUuid: string) => {
   const channelName = `chat-${userUuid}`
   userChannel = pusher.subscribe(channelName)
 
-  // Listen for incoming messages on user's own UUID channel
+  // Listen for message deletions and updates
   userChannel.bind('new-message', (data: any) => {
-    console.log('Received message on channel:', channelName, data)
+    // Handle delete-message action
+    if (data.action === 'delete-message' || data.action === 'delete') {
+      const messageId = data.messageId || data.id
+      const messageIndex = chats.value.findIndex(c => c.id === messageId)
+
+      if (messageIndex !== -1) {
+        const deletedMessage = chats.value[messageIndex]
+        chats.value.splice(messageIndex, 1)
+        showToast('💬 Message deleted', {
+          color: 'warning',
+          timeout: 2000
+        })
+      }
+      return
+    }
+
+    // Handle edit-message action
+    if (data.action === 'edit-message' || data.action === 'update') {
+      const messageId = data.messageId || data.id
+      const messageIndex = chats.value.findIndex(c => c.id === messageId)
+
+      if (messageIndex !== -1) {
+        chats.value[messageIndex].message = data.message
+        showToast('✏️ Message updated', {
+          color: 'info',
+          timeout: 2000
+        })
+      }
+      return
+    }
 
     // This message is sent to our channel, so we are the recipient (data.chatToUuid === chatFromUuid.value)
     // Only process if this message is intended for us
     if (data.chatToUuid !== userUuid) {
-      console.log('Message not for this user, ignoring')
       return
     }
 
@@ -110,15 +139,10 @@ const initPusher = (userUuid: string) => {
           }
         }, 100)
       }
-    } else {
-      // Message from someone else (not in current conversation)
-      // Could show a notification anyway for new messages
-      console.log('Message received but not for current conversation')
     }
   })
 
   userChannel.bind('pusher:subscription_error', (status: number) => {
-    console.error('Pusher subscription error:', status)
     showToast('Connection error', {
       description: 'Failed to connect to real-time service',
       color: 'error',
@@ -127,7 +151,32 @@ const initPusher = (userUuid: string) => {
   })
 
   userChannel.bind('pusher:subscription_succeeded', () => {
-    console.log(`Successfully subscribed to ${channelName}`)
+  })
+
+  // Test event listener
+  userChannel.bind('test-event', (data: any) => {
+    showToast('✅ Pusher connection test successful!', { color: 'success', timeout: 3000 })
+  })
+
+  // Separate listeners for delete and edit messages
+  userChannel.bind('delete-message', (data: any) => {
+    const messageId = data.messageId || data.id
+    const messageIndex = chats.value.findIndex(c => c.id === messageId)
+
+    if (messageIndex !== -1) {
+      chats.value.splice(messageIndex, 1)
+      showToast('💬 Message deleted', { color: 'warning', timeout: 2000 })
+    }
+  })
+
+  userChannel.bind('edit-message', (data: any) => {
+    const messageId = data.messageId || data.id
+    const messageIndex = chats.value.findIndex(c => c.id === messageId)
+
+    if (messageIndex !== -1) {
+      chats.value[messageIndex].message = data.message
+      showToast('✏️ Message updated', { color: 'info', timeout: 2000 })
+    }
   })
 }
 
@@ -219,8 +268,10 @@ const fetchUserName = async (uuid: string) => {
     })
     chatToUserName.value = (response as any).name || 'Unknown User'
     userProfileLoaded.value = true
+
+    // Automatically load chats after user is found
+    await fetchChats()
   } catch (error: any) {
-    console.error('Failed to fetch user name:', error)
     chatToUserName.value = 'User not found'
     userProfileLoaded.value = false
   } finally {
@@ -351,6 +402,61 @@ const showToast = (title: string, options?: { description?: string; color?: 'err
 const formatTime = (dateString: string) => {
   return new Date(dateString).toLocaleString()
 }
+
+const deleteMessage = async (messageId: number) => {
+  try {
+    const response = await $fetch(`${config.public.apiBase}/chats/${messageId}`, {
+      method: 'DELETE'
+    })
+
+    // Remove from local array
+    const index = chats.value.findIndex(c => c.id === messageId)
+    if (index !== -1) {
+      chats.value.splice(index, 1)
+    }
+
+    showToast('✓ Message deleted', { color: 'success', timeout: 1500 })
+  } catch (error: any) {
+    showToast('Failed to delete message', { description: error.message, color: 'error' })
+  }
+}
+
+const startEditMessage = (chat: any) => {
+  editingMessageId.value = chat.id
+  editingMessageText.value = chat.message
+}
+
+const cancelEdit = () => {
+  editingMessageId.value = null
+  editingMessageText.value = ''
+}
+
+const saveEditMessage = async (messageId: number) => {
+  if (!editingMessageText.value.trim()) {
+    showToast('Message cannot be empty', { color: 'error' })
+    return
+  }
+
+  try {
+    const response = await $fetch(`${config.public.apiBase}/chats/${messageId}`, {
+      method: 'PUT',
+      body: {
+        message: editingMessageText.value
+      }
+    })
+
+    // Update local array
+    const index = chats.value.findIndex(c => c.id === messageId)
+    if (index !== -1) {
+      chats.value[index].message = editingMessageText.value
+    }
+
+    cancelEdit()
+    showToast('✓ Message updated', { color: 'success', timeout: 1500 })
+  } catch (error: any) {
+    showToast('Failed to update message', { description: error.message, color: 'error' })
+  }
+}
 </script>
 
 <template>
@@ -477,23 +583,12 @@ const formatTime = (dateString: string) => {
               <UButton
                 v-if="!userProfileLoaded"
                 @click="findUser"
-                :loading="loadingUserName"
+                :loading="loadingUserName || loading"
                 icon="i-lucide-search"
                 size="lg"
                 class="flex-shrink-0 whitespace-nowrap"
               >
                 Find User
-              </UButton>
-              <UButton
-                v-else
-                @click="fetchChats"
-                :loading="loading"
-                icon="i-lucide-download"
-                size="lg"
-                color="primary"
-                class="flex-shrink-0 whitespace-nowrap"
-              >
-                Load Chats
               </UButton>
             </div>
           </div>
@@ -508,26 +603,79 @@ const formatTime = (dateString: string) => {
                 v-for="chat in chats"
                 :key="chat.id"
                 :class="[
-                  'flex gap-3',
+                  'flex gap-3 group',
                   chat.chatFrom.uuid === chatFromUuid ? 'justify-end' : 'justify-start'
                 ]"
               >
                 <div
                   :class="[
-                    'max-w-[75%] rounded-xl p-4 shadow-sm',
+                    'max-w-[75%] rounded-xl p-4 shadow-sm relative',
                     chat.chatFrom.uuid === chatFromUuid
                       ? 'bg-green-500 text-white'
                       : 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white'
                   ]"
                 >
+                  <!-- Action buttons - only show for own messages -->
+                  <div v-if="chat.chatFrom.uuid === chatFromUuid" class="absolute -top-2 -right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                    <!-- Edit button -->
+                    <button
+                      @click="startEditMessage(chat)"
+                      class="w-6 h-6 rounded-full flex items-center justify-center shadow-lg bg-blue-500 hover:bg-blue-600 text-white"
+                      title="Edit message"
+                    >
+                      <UIcon name="i-lucide-pencil" class="w-3 h-3" />
+                    </button>
+                    <!-- Delete button -->
+                    <button
+                      @click="deleteMessage(chat.id)"
+                      class="w-6 h-6 rounded-full flex items-center justify-center shadow-lg bg-red-500 hover:bg-red-600 text-white"
+                      title="Delete message"
+                    >
+                      <UIcon name="i-lucide-trash-2" class="w-3 h-3" />
+                    </button>
+                  </div>
+
                   <div class="flex items-center gap-2 mb-2">
                     <UIcon name="i-lucide-user" class="w-4 h-4 flex-shrink-0" />
                     <p class="text-xs font-semibold">{{ chat.chatFrom.name }}</p>
                   </div>
-                  <p class="text-sm mb-2 leading-relaxed">{{ chat.message }}</p>
-                  <div class="flex items-center gap-2 text-xs opacity-80">
-                    <UIcon name="i-lucide-clock" class="w-3 h-3" />
-                    <span>{{ formatTime(chat.createdAt) }}</span>
+
+                  <!-- Edit mode -->
+                  <div v-if="editingMessageId === chat.id" class="space-y-2">
+                    <UInput
+                      v-model="editingMessageText"
+                      size="sm"
+                      autofocus
+                      @keyup.enter="saveEditMessage(chat.id)"
+                      @keyup.esc="cancelEdit"
+                      :ui="{ base: 'text-gray-900 dark:text-white' }"
+                    />
+                    <div class="flex gap-2">
+                      <UButton
+                        @click="saveEditMessage(chat.id)"
+                        size="xs"
+                        icon="i-lucide-check"
+                        color="primary"
+                      >
+                        Save
+                      </UButton>
+                      <UButton
+                        @click="cancelEdit"
+                        size="xs"
+                        icon="i-lucide-x"
+                        variant="outline"
+                        :ui="{ base: chat.chatFrom.uuid === chatFromUuid ? 'text-white border-white hover:bg-white/20' : '' }"
+                      >
+                        Cancel
+                      </UButton>
+                    </div>
+                  </div>
+
+                  <!-- Normal view -->
+                  <div v-else>
+                    <UTooltip :text="formatTime(chat.createdAt)" :shortcuts="[]">
+                      <p class="text-sm mb-2 leading-relaxed cursor-help">{{ chat.message }}</p>
+                    </UTooltip>
                   </div>
                 </div>
               </div>
