@@ -3,19 +3,25 @@ export default defineNuxtConfig({
   modules: ['@nuxt/eslint', '@nuxt/ui', '@nuxt/image'],
 
   devtools: {
-    enabled: true
+    enabled: true,
+
+    timeline: {
+      enabled: true,
+    },
   },
 
   css: ['~/assets/css/main.css'],
 
-  routeRules: {
-    '/': { prerender: false }
-  },
-
   runtimeConfig: {
     public: {
-      apiBase: 'http://localhost:8081/api/v1'
+      apiBase: 'http://localhost:8081/api/v1',
+      pusherKey: '',
+      pusherCluster: 'ap1'
     }
+  },
+
+  routeRules: {
+    '/': { prerender: false }
   },
 
   compatibilityDate: '2025-01-15',
@@ -27,5 +33,5 @@ export default defineNuxtConfig({
         braceStyle: '1tbs'
       }
     }
-  }
+  },
 })

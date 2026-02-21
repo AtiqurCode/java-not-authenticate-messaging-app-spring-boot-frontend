@@ -49,8 +49,8 @@ const showNotification = (title: string, options?: NotificationOptions) => {
 const initPusher = (userUuid: string) => {
   if (pusher) return
 
-  pusher = new Pusher('e74dc87a03e4dbf5d60b', {
-    cluster: 'ap1'
+  pusher = new Pusher(config.public.pusherKey as string, {
+    cluster: config.public.pusherCluster as string
   })
 
   // Subscribe to user's public per-uuid channel (no auth)
